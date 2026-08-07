@@ -1533,7 +1533,7 @@ export const Route = createFileRoute("/api/chat-ai")({
             }
 
 
-            const notes =
+            const customerNote =
               typeof args.notes === "string" && args.notes.trim()
                 ? safeSlice(args.notes.trim(), 0, 2000)
                 : null;
@@ -1556,6 +1556,56 @@ export const Route = createFileRoute("/api/chat-ai")({
               cleanedItems[i].price = p.unit_price;
               cleanedItems[i].line_total = p.line_total;
             }
+
+            // SHIPPING — inferred from the address and everything the customer
+            // said before, then ADDED to the order total (products + shipping).
+            const { matchShippingZone } = await import("@/lib/order-input-validation");
+            const shippingMatch = matchShippingZone(
+              merchantData.shipping as any,
+              [address, ...customerTexts],
+            );
+            const shippingZone = shippingMatch.zone;
+            const shippingCost =
+              shippingZone && Number.isFinite(Number(shippingZone.price))
+                ? Math.max(0, Number(shippingZone.price))
+                : 0;
+            if (!shippingZone && (merchantData.shipping ?? []).length > 1) {
+              return {
+                result: {
+                  ok: false,
+                  error: "shipping_zone_unknown",
+                  available_zones: merchantData.shipping.map((s) =>
+                    [s.country, s.region].filter(Boolean).join(" / "),
+                  ),
+                  message:
+                    "The order was NOT created because the shipping zone could not be inferred from the address or from anything the customer said. Ask the customer in Egyptian Arabic which zone from the list they belong to, then call create_order again. Never guess a zone, and do not say anything about confirming the order.",
+                },
+                createdOrderNumber: null,
+              };
+            }
+            const orderCurrency = pricing.currency ?? shippingZone?.currency ?? "";
+            const grandTotal = Math.round((pricing.total + shippingCost) * 100) / 100;
+            const zoneLabel = shippingZone
+              ? [shippingZone.country, shippingZone.region].filter(Boolean).join(" / ")
+              : null;
+            const notes = safeSlice(
+              [
+                customerNote ?? "",
+                "— تفاصيل الأوردر —",
+                zoneLabel ? `منطقة الشحن: ${zoneLabel}` : "",
+                `إجمالي المنتجات: ${pricing.subtotal} ${orderCurrency}`.trim(),
+                pricing.discount_total > 0
+                  ? `الخصم: ${pricing.discount_total} ${orderCurrency}`.trim()
+                  : "",
+                `الشحن: ${shippingCost} ${orderCurrency}`.trim(),
+                `الإجمالي النهائي: ${grandTotal} ${orderCurrency}`.trim(),
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              0,
+              2000,
+            );
+
 
             const { paymentDeductionPlan } = await import("@/lib/storefront-order.server");
             const deductionPlan = paymentDeductionPlan(chosenMethod?.behavior);
