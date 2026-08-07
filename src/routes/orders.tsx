@@ -186,6 +186,9 @@ function OrdersPage() {
                         <td className="px-4 py-3 text-xs text-muted-foreground max-w-[220px] truncate" title={o.customer_address ?? ""}>
                           {o.customer_address ?? "—"}
                         </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <OrderValue order={o} />
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(o.status)}`}>
                             {statusLabel(o.status)}
