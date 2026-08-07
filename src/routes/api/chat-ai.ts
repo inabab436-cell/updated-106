@@ -1453,6 +1453,60 @@ export const Route = createFileRoute("/api/chat-ai")({
               }
             }
 
+            // FORMAT GATE — the data must also be USABLE for delivery:
+            // a real two/three-part human name, a valid Egyptian mobile, and
+            // an address with governorate + area + street/landmark.
+            {
+              const { validateCustomerName, validateEgyptianPhone, validateAddress } =
+                await import("@/lib/order-input-validation");
+              const problems: Array<{ field: string; reason: string; ask: string }> = [];
+              const nameCheck = validateCustomerName(name);
+              if (!nameCheck.ok) {
+                problems.push({
+                  field: "customer_name",
+                  reason: nameCheck.reason ?? "invalid",
+                  ask: "اطلب منه الاسم بالكامل (اسم ثنائي أو ثلاثي بحروف فقط، من غير أرقام أو رموز).",
+                });
+              }
+              const phoneCheck = validateEgyptianPhone(phone);
+              if (!phoneCheck.ok) {
+                problems.push({
+                  field: "customer_phone",
+                  reason: phoneCheck.reason ?? "invalid",
+                  ask: "اطلب منه رقم موبايل مصري صحيح مكوّن من 11 رقم يبدأ بـ 010 أو 011 أو 012 أو 015.",
+                });
+              }
+              const addressCheck = validateAddress(address);
+              if (!addressCheck.ok) {
+                const wanted: string[] = [];
+                if (addressCheck.missing.includes("governorate")) wanted.push("المحافظة");
+                if (addressCheck.missing.includes("area")) wanted.push("المنطقة أو الحي");
+                if (addressCheck.missing.includes("street_or_landmark"))
+                  wanted.push("الشارع أو علامة مميزة واضحة توصّل للمكان");
+                problems.push({
+                  field: "customer_address",
+                  reason: addressCheck.reason ?? "invalid",
+                  ask:
+                    `العنوان ناقص. اطلب منه فقط: ${wanted.join(" + ")}. ` +
+                    "رقم العقار ورقم الشقة والعلامة المميزة اختيارية، متطلبهاش كشرط.",
+                });
+              }
+              if (problems.length) {
+                return {
+                  result: {
+                    ok: false,
+                    error: "invalid_customer_data",
+                    problems,
+                    message:
+                      "The order was NOT created because some fields are not usable for delivery. Ask the customer in Egyptian Arabic ONLY for what is listed in each problem's `ask`, one thing at a time, keep everything else you already collected, and never ask again about data that is already valid. Do NOT provide any order number and do NOT say anything about confirming the order.",
+                  },
+                  createdOrderNumber: null,
+                };
+              }
+            }
+
+
+
             // The payment method must be the customer's OWN choice. Assuming a
             // method (typically cash on delivery) would mark the order as paid
             // and skip the merchant's manual-payment step entirely.
