@@ -1675,15 +1675,29 @@ export const Route = createFileRoute("/api/chat-ai")({
               };
             }
 
-            // Store the real value of the order (after the engine's discount),
+            // Store the real value of the order (products − discount + shipping),
             // so the merchant sees it and every offer check works on numbers.
-            if (pricing.total > 0 || pricing.subtotal > 0) {
+            if (grandTotal > 0 || pricing.subtotal > 0) {
               const { error: totalErr } = await supabase
                 .from("orders")
-                .update({ total_price: pricing.total })
+                .update({ total_price: grandTotal })
                 .eq("order_number", orderNumber);
               if (totalErr) console.error("[chat-ai] order total update failed", totalErr.message);
+              // Breakdown columns are optional (older databases lack them).
+              try {
+                await supabase
+                  .from("orders")
+                  .update({
+                    shipping_cost: shippingCost,
+                    discount_amount: pricing.discount_total,
+                    subtotal_price: pricing.subtotal,
+                  })
+                  .eq("order_number", orderNumber);
+              } catch {
+                /* breakdown columns not present yet */
+              }
             }
+
 
             await supabase.from("notifications").insert({
               type: "new_order",
