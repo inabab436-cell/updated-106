@@ -59,6 +59,49 @@ function fmtDate(iso: string | null): string {
   } catch { return iso; }
 }
 
+function fmtMoney(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+/**
+ * Order value = what the customer pays (products − discount + shipping).
+ * When a discount was applied, a small line under the value states it, as
+ * either an amount or a percentage of the products total.
+ */
+function OrderValue({ order }: { order: OrderRow }) {
+  const currency =
+    (order.items.find((i) => (i.currency ?? "").trim())?.currency ?? "").trim();
+  const itemsTotal = order.items.reduce((sum, i) => {
+    const line =
+      i.line_total ?? (Number(i.unit_price ?? i.price ?? 0) * Number(i.quantity ?? 0));
+    const n = Number(line);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+  const subtotal = Number(order.subtotal_price ?? itemsTotal) || 0;
+  const total = order.total_price != null ? Number(order.total_price) : null;
+  const discount = Number(order.discount_amount ?? 0) || 0;
+
+  if (total == null && subtotal <= 0) return <span className="text-muted-foreground">—</span>;
+  const value = total ?? subtotal;
+  const percent = discount > 0 && subtotal > 0 ? Math.round((discount / subtotal) * 100) : 0;
+
+  return (
+    <div className="leading-tight">
+      <div className="font-semibold">
+        {fmtMoney(value)} {currency}
+      </div>
+      {discount > 0 && (
+        <div className="text-[11px] text-emerald-700">
+          بعد خصم {fmtMoney(discount)} {currency}
+          {percent > 0 ? ` (${percent}%)` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
 function OrdersPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["orders"], queryFn: () => listOrders() });
