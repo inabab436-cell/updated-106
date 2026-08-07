@@ -264,7 +264,7 @@ function OrdersPage() {
                       {open && (
                         <tr className="bg-muted/10">
                           <td></td>
-                          <td colSpan={7} className="px-4 py-4">
+                          <td colSpan={8} className="px-4 py-4">
                             <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                               تفاصيل المنتجات
                             </div>
