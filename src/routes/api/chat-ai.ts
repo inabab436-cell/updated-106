@@ -905,28 +905,42 @@ export const Route = createFileRoute("/api/chat-ai")({
           try {
             const { data: orders } = await supabase
               .from("orders")
-              .select("order_number, items, status")
+              .select(
+                "order_number, items, status, payment_status, payment_method, payment_confirmed_at, total_price",
+              )
               .eq("conversation_id", conversation_id);
-            const rows = (orders ?? []) as OrderRow[];
+            const rows = (orders ?? []) as Array<Record<string, unknown>>;
             if (rows.length) {
+              const lines = rows.map((o) => {
+                const items = Array.isArray(o.items) ? (o.items as Array<Record<string, unknown>>) : [];
+                const first = items.length ? items[0] : null;
+                const productName =
+                  first && typeof first.product_name === "string" ? first.product_name : "-";
+                const paid = String(o.payment_status ?? "confirmed") !== "pending";
+                return (
+                  `Order Number: ${o.order_number ?? "-"} | Product: ${productName} | Status: ${o.status ?? "-"}` +
+                  ` | Payment method: ${o.payment_method ?? "-"}` +
+                  ` | Payment: ${paid ? "CONFIRMED (paid)" : "PENDING (not paid yet)"}` +
+                  (o.total_price != null ? ` | Total: ${o.total_price}` : "")
+                );
+              });
+              const justConfirmed = rows.filter(
+                (o) => String(o.payment_status ?? "confirmed") !== "pending",
+              );
               existingOrdersBlock =
-                "\n\nExisting orders in this conversation:\n" +
-                rows
-                  .map((o) => {
-                    const first = Array.isArray(o.items) && o.items.length
-                      ? (o.items[0] as Record<string, unknown>)
-                      : null;
-                    const productName =
-                      first && typeof first.product_name === "string"
-                        ? first.product_name
-                        : "-";
-                    return `Order Number: ${o.order_number ?? "-"} | Product: ${productName} | Status: ${o.status ?? "-"}`;
-                  })
-                  .join("\n");
+                "\n\nExisting orders in this conversation (live state, always trust this over the chat history):\n" +
+                lines.join("\n") +
+                (justConfirmed.length
+                  ? "\n\nPAYMENT STATE: the store team has ALREADY confirmed the payment of " +
+                    justConfirmed.map((o) => String(o.order_number ?? "-")).join(", ") +
+                    ". Treat these orders as fully confirmed and paid: never ask the customer to pay again, never ask for a transfer screenshot again, never ask them to confirm the order again, and never say the order is still waiting for payment. If they ask, reassure them that the payment arrived and the order is being processed."
+                  : "") +
+                "\nNever create a new order for an order that is already listed here.";
             }
           } catch (_) {
             // orders table may not exist; skip silently.
           }
+
 
           // ------------------------------------------------------------------
           // STORE KNOWLEDGE — read DIRECTLY from the live database.
