@@ -20,6 +20,10 @@ export interface OrderItem {
   color: string | null;
   size: string | null;
   quantity: number | null;
+  price?: number | null;
+  unit_price?: number | null;
+  line_total?: number | null;
+  currency?: string | null;
 }
 
 export interface OrderRow {
@@ -40,7 +44,13 @@ export interface OrderRow {
   /** 'pending' = manual payment not confirmed yet → no stock deducted. */
   payment_status: string;
   payment_confirmed_at: string | null;
+  /** Final value of the order: products − discount + shipping. */
+  total_price: number | null;
+  subtotal_price: number | null;
+  discount_amount: number | null;
+  shipping_cost: number | null;
 }
+
 
 
 async function getMerchantId(userId: string): Promise<string | null> {
