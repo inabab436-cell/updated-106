@@ -20,6 +20,10 @@ export interface OrderItem {
   color: string | null;
   size: string | null;
   quantity: number | null;
+  price?: number | null;
+  unit_price?: number | null;
+  line_total?: number | null;
+  currency?: string | null;
 }
 
 export interface OrderRow {
@@ -40,7 +44,13 @@ export interface OrderRow {
   /** 'pending' = manual payment not confirmed yet → no stock deducted. */
   payment_status: string;
   payment_confirmed_at: string | null;
+  /** Final value of the order: products − discount + shipping. */
+  total_price: number | null;
+  subtotal_price: number | null;
+  discount_amount: number | null;
+  shipping_cost: number | null;
 }
+
 
 
 async function getMerchantId(userId: string): Promise<string | null> {
@@ -63,11 +73,11 @@ export const listOrders = createServerFn({ method: "GET" }).handler(
     const merchantId = await getMerchantId(userId);
     if (!merchantId) return [];
     const admin = getSupabaseAdmin();
+    // `*` so the optional amount-breakdown columns are included when the
+    // database has them, without failing on older databases that don't.
     const { data, error } = await admin
       .from("orders")
-      .select(
-        "id, order_number, customer_name, customer_phone, customer_address, status, items, notes, created_at, prepared_at, shipped_at, delivered_at, conversation_id, payment_method, payment_status, payment_confirmed_at",
-      )
+      .select("*")
       .eq("merchant_id", merchantId)
       .order("created_at", { ascending: false })
       .limit(500);
@@ -76,6 +86,10 @@ export const listOrders = createServerFn({ method: "GET" }).handler(
       ...r,
       items: Array.isArray(r.items) ? r.items : [],
       payment_status: r.payment_status ?? "confirmed",
+      total_price: r.total_price ?? null,
+      subtotal_price: r.subtotal_price ?? null,
+      discount_amount: r.discount_amount ?? null,
+      shipping_cost: r.shipping_cost ?? null,
     })) as OrderRow[];
   },
 );

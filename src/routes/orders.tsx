@@ -59,6 +59,49 @@ function fmtDate(iso: string | null): string {
   } catch { return iso; }
 }
 
+function fmtMoney(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+/**
+ * Order value = what the customer pays (products − discount + shipping).
+ * When a discount was applied, a small line under the value states it, as
+ * either an amount or a percentage of the products total.
+ */
+function OrderValue({ order }: { order: OrderRow }) {
+  const currency =
+    (order.items.find((i) => (i.currency ?? "").trim())?.currency ?? "").trim();
+  const itemsTotal = order.items.reduce((sum, i) => {
+    const line =
+      i.line_total ?? (Number(i.unit_price ?? i.price ?? 0) * Number(i.quantity ?? 0));
+    const n = Number(line);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+  const subtotal = Number(order.subtotal_price ?? itemsTotal) || 0;
+  const total = order.total_price != null ? Number(order.total_price) : null;
+  const discount = Number(order.discount_amount ?? 0) || 0;
+
+  if (total == null && subtotal <= 0) return <span className="text-muted-foreground">—</span>;
+  const value = total ?? subtotal;
+  const percent = discount > 0 && subtotal > 0 ? Math.round((discount / subtotal) * 100) : 0;
+
+  return (
+    <div className="leading-tight">
+      <div className="font-semibold">
+        {fmtMoney(value)} {currency}
+      </div>
+      {discount > 0 && (
+        <div className="text-[11px] text-emerald-700">
+          بعد خصم {fmtMoney(discount)} {currency}
+          {percent > 0 ? ` (${percent}%)` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
 function OrdersPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["orders"], queryFn: () => listOrders() });
@@ -157,6 +200,7 @@ function OrdersPage() {
                   <th className="px-4 py-3">العميل</th>
                   <th className="px-4 py-3">الهاتف</th>
                   <th className="px-4 py-3">العنوان</th>
+                  <th className="px-4 py-3">قيمة الطلب</th>
                   <th className="px-4 py-3">الحالة</th>
                   <th className="px-4 py-3">الدفع</th>
                   <th className="px-4 py-3">التاريخ</th>
@@ -184,6 +228,9 @@ function OrdersPage() {
                         <td className="px-4 py-3 font-mono text-xs" dir="ltr">{o.customer_phone ?? "—"}</td>
                         <td className="px-4 py-3 text-xs text-muted-foreground max-w-[220px] truncate" title={o.customer_address ?? ""}>
                           {o.customer_address ?? "—"}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <OrderValue order={o} />
                         </td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass(o.status)}`}>
@@ -260,7 +307,7 @@ function OrdersPage() {
                       {open && (
                         <tr className="bg-muted/10">
                           <td></td>
-                          <td colSpan={7} className="px-4 py-4">
+                          <td colSpan={8} className="px-4 py-4">
                             <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                               تفاصيل المنتجات
                             </div>

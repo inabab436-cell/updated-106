@@ -905,28 +905,42 @@ export const Route = createFileRoute("/api/chat-ai")({
           try {
             const { data: orders } = await supabase
               .from("orders")
-              .select("order_number, items, status")
+              .select(
+                "order_number, items, status, payment_status, payment_method, payment_confirmed_at, total_price",
+              )
               .eq("conversation_id", conversation_id);
-            const rows = (orders ?? []) as OrderRow[];
+            const rows = (orders ?? []) as Array<Record<string, unknown>>;
             if (rows.length) {
+              const lines = rows.map((o) => {
+                const items = Array.isArray(o.items) ? (o.items as Array<Record<string, unknown>>) : [];
+                const first = items.length ? items[0] : null;
+                const productName =
+                  first && typeof first.product_name === "string" ? first.product_name : "-";
+                const paid = String(o.payment_status ?? "confirmed") !== "pending";
+                return (
+                  `Order Number: ${o.order_number ?? "-"} | Product: ${productName} | Status: ${o.status ?? "-"}` +
+                  ` | Payment method: ${o.payment_method ?? "-"}` +
+                  ` | Payment: ${paid ? "CONFIRMED (paid)" : "PENDING (not paid yet)"}` +
+                  (o.total_price != null ? ` | Total: ${o.total_price}` : "")
+                );
+              });
+              const justConfirmed = rows.filter(
+                (o) => String(o.payment_status ?? "confirmed") !== "pending",
+              );
               existingOrdersBlock =
-                "\n\nExisting orders in this conversation:\n" +
-                rows
-                  .map((o) => {
-                    const first = Array.isArray(o.items) && o.items.length
-                      ? (o.items[0] as Record<string, unknown>)
-                      : null;
-                    const productName =
-                      first && typeof first.product_name === "string"
-                        ? first.product_name
-                        : "-";
-                    return `Order Number: ${o.order_number ?? "-"} | Product: ${productName} | Status: ${o.status ?? "-"}`;
-                  })
-                  .join("\n");
+                "\n\nExisting orders in this conversation (live state, always trust this over the chat history):\n" +
+                lines.join("\n") +
+                (justConfirmed.length
+                  ? "\n\nPAYMENT STATE: the store team has ALREADY confirmed the payment of " +
+                    justConfirmed.map((o) => String(o.order_number ?? "-")).join(", ") +
+                    ". Treat these orders as fully confirmed and paid: never ask the customer to pay again, never ask for a transfer screenshot again, never ask them to confirm the order again, and never say the order is still waiting for payment. If they ask, reassure them that the payment arrived and the order is being processed."
+                  : "") +
+                "\nNever create a new order for an order that is already listed here.";
             }
           } catch (_) {
             // orders table may not exist; skip silently.
           }
+
 
           // ------------------------------------------------------------------
           // STORE KNOWLEDGE — read DIRECTLY from the live database.
@@ -1439,6 +1453,60 @@ export const Route = createFileRoute("/api/chat-ai")({
               }
             }
 
+            // FORMAT GATE — the data must also be USABLE for delivery:
+            // a real two/three-part human name, a valid Egyptian mobile, and
+            // an address with governorate + area + street/landmark.
+            {
+              const { validateCustomerName, validateEgyptianPhone, validateAddress } =
+                await import("@/lib/order-input-validation");
+              const problems: Array<{ field: string; reason: string; ask: string }> = [];
+              const nameCheck = validateCustomerName(name);
+              if (!nameCheck.ok) {
+                problems.push({
+                  field: "customer_name",
+                  reason: nameCheck.reason ?? "invalid",
+                  ask: "اطلب منه الاسم بالكامل (اسم ثنائي أو ثلاثي بحروف فقط، من غير أرقام أو رموز).",
+                });
+              }
+              const phoneCheck = validateEgyptianPhone(phone);
+              if (!phoneCheck.ok) {
+                problems.push({
+                  field: "customer_phone",
+                  reason: phoneCheck.reason ?? "invalid",
+                  ask: "اطلب منه رقم موبايل مصري صحيح مكوّن من 11 رقم يبدأ بـ 010 أو 011 أو 012 أو 015.",
+                });
+              }
+              const addressCheck = validateAddress(address);
+              if (!addressCheck.ok) {
+                const wanted: string[] = [];
+                if (addressCheck.missing.includes("governorate")) wanted.push("المحافظة");
+                if (addressCheck.missing.includes("area")) wanted.push("المنطقة أو الحي");
+                if (addressCheck.missing.includes("street_or_landmark"))
+                  wanted.push("الشارع أو علامة مميزة واضحة توصّل للمكان");
+                problems.push({
+                  field: "customer_address",
+                  reason: addressCheck.reason ?? "invalid",
+                  ask:
+                    `العنوان ناقص. اطلب منه فقط: ${wanted.join(" + ")}. ` +
+                    "رقم العقار ورقم الشقة والعلامة المميزة اختيارية، متطلبهاش كشرط.",
+                });
+              }
+              if (problems.length) {
+                return {
+                  result: {
+                    ok: false,
+                    error: "invalid_customer_data",
+                    problems,
+                    message:
+                      "The order was NOT created because some fields are not usable for delivery. Ask the customer in Egyptian Arabic ONLY for what is listed in each problem's `ask`, one thing at a time, keep everything else you already collected, and never ask again about data that is already valid. Do NOT provide any order number and do NOT say anything about confirming the order.",
+                  },
+                  createdOrderNumber: null,
+                };
+              }
+            }
+
+
+
             // The payment method must be the customer's OWN choice. Assuming a
             // method (typically cash on delivery) would mark the order as paid
             // and skip the merchant's manual-payment step entirely.
@@ -1465,7 +1533,7 @@ export const Route = createFileRoute("/api/chat-ai")({
             }
 
 
-            const notes =
+            const customerNote =
               typeof args.notes === "string" && args.notes.trim()
                 ? safeSlice(args.notes.trim(), 0, 2000)
                 : null;
@@ -1488,6 +1556,56 @@ export const Route = createFileRoute("/api/chat-ai")({
               cleanedItems[i].price = p.unit_price;
               cleanedItems[i].line_total = p.line_total;
             }
+
+            // SHIPPING — inferred from the address and everything the customer
+            // said before, then ADDED to the order total (products + shipping).
+            const { matchShippingZone } = await import("@/lib/order-input-validation");
+            const shippingMatch = matchShippingZone(
+              merchantData.shipping as any,
+              [address, ...customerTexts],
+            );
+            const shippingZone = shippingMatch.zone;
+            const shippingCost =
+              shippingZone && Number.isFinite(Number(shippingZone.price))
+                ? Math.max(0, Number(shippingZone.price))
+                : 0;
+            if (!shippingZone && (merchantData.shipping ?? []).length > 1) {
+              return {
+                result: {
+                  ok: false,
+                  error: "shipping_zone_unknown",
+                  available_zones: merchantData.shipping.map((s) =>
+                    [s.country, s.region].filter(Boolean).join(" / "),
+                  ),
+                  message:
+                    "The order was NOT created because the shipping zone could not be inferred from the address or from anything the customer said. Ask the customer in Egyptian Arabic which zone from the list they belong to, then call create_order again. Never guess a zone, and do not say anything about confirming the order.",
+                },
+                createdOrderNumber: null,
+              };
+            }
+            const orderCurrency = pricing.currency ?? shippingZone?.currency ?? "";
+            const grandTotal = Math.round((pricing.total + shippingCost) * 100) / 100;
+            const zoneLabel = shippingZone
+              ? [shippingZone.country, shippingZone.region].filter(Boolean).join(" / ")
+              : null;
+            const notes = safeSlice(
+              [
+                customerNote ?? "",
+                "— تفاصيل الأوردر —",
+                zoneLabel ? `منطقة الشحن: ${zoneLabel}` : "",
+                `إجمالي المنتجات: ${pricing.subtotal} ${orderCurrency}`.trim(),
+                pricing.discount_total > 0
+                  ? `الخصم: ${pricing.discount_total} ${orderCurrency}`.trim()
+                  : "",
+                `الشحن: ${shippingCost} ${orderCurrency}`.trim(),
+                `الإجمالي النهائي: ${grandTotal} ${orderCurrency}`.trim(),
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              0,
+              2000,
+            );
+
 
             const { paymentDeductionPlan } = await import("@/lib/storefront-order.server");
             const deductionPlan = paymentDeductionPlan(chosenMethod?.behavior);
@@ -1557,15 +1675,29 @@ export const Route = createFileRoute("/api/chat-ai")({
               };
             }
 
-            // Store the real value of the order (after the engine's discount),
+            // Store the real value of the order (products − discount + shipping),
             // so the merchant sees it and every offer check works on numbers.
-            if (pricing.total > 0 || pricing.subtotal > 0) {
+            if (grandTotal > 0 || pricing.subtotal > 0) {
               const { error: totalErr } = await supabase
                 .from("orders")
-                .update({ total_price: pricing.total })
+                .update({ total_price: grandTotal })
                 .eq("order_number", orderNumber);
               if (totalErr) console.error("[chat-ai] order total update failed", totalErr.message);
+              // Breakdown columns are optional (older databases lack them).
+              try {
+                await supabase
+                  .from("orders")
+                  .update({
+                    shipping_cost: shippingCost,
+                    discount_amount: pricing.discount_total,
+                    subtotal_price: pricing.subtotal,
+                  })
+                  .eq("order_number", orderNumber);
+              } catch {
+                /* breakdown columns not present yet */
+              }
             }
+
 
             await supabase.from("notifications").insert({
               type: "new_order",
