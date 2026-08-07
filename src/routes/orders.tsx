@@ -157,6 +157,7 @@ function OrdersPage() {
                   <th className="px-4 py-3">العميل</th>
                   <th className="px-4 py-3">الهاتف</th>
                   <th className="px-4 py-3">العنوان</th>
+                  <th className="px-4 py-3">قيمة الطلب</th>
                   <th className="px-4 py-3">الحالة</th>
                   <th className="px-4 py-3">الدفع</th>
                   <th className="px-4 py-3">التاريخ</th>
